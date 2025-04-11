@@ -38,16 +38,19 @@ func setSystemVolume(_ value: Double) {
 
 struct ContentView: View {
     @State private var volumeManager = VolumeManager()
+    @State private var isTapped: Bool = false
     
     var body: some View {
         VStack(spacing: 40) {
             ZStack{
                 Text("\(Int(volumeManager.volume * 100))%")
+                  
                     .contentTransition(.numericText())
                     .font(.largeTitle)
                    
                     .fontWeight(.black)
                     .fontDesign(.rounded)
+
 
                 Text("\(Int(volumeManager.volume * 100))%")
                     .font(.largeTitle)
@@ -57,16 +60,36 @@ struct ContentView: View {
                     .foregroundStyle(.thinMaterial.opacity(0.8))
                     .blur(radius: 2)
             }
+            .sensoryFeedback(.selection, trigger: isTapped)
+            .onTapGesture {
+                isTapped.toggle()
+                print("is tapped is \(isTapped)")
+            }
             
             Spacer()
             
             ThreeQuarterVolumeKnob(volume: $volumeManager.volume)
                 .frame(width: 240, height: 240)
 
-            
+        
             Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
         .padding()
+        .background {
+            ZStack{
+                HiddenVolumeView()
+                    .scaleEffect(1.5)
+                    .blur(radius: 10)
+                Color.white.opacity(0.2)
+                Rectangle()
+                    .foregroundStyle(.ultraThinMaterial)
+            }
+            .ignoresSafeArea(.all)
+           
+        }
+      
     }
 }
 

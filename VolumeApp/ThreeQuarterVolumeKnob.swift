@@ -20,8 +20,12 @@ struct ThreeQuarterVolumeKnob: View {
     ///  → knobAngle=225 at volume=0, knobAngle=–45 at volume=1.
     @State private var knobAngle: Double = 225
     
-    @State private var isAligned = false
-    
+    @State private var lastVolume: Double = 0
+    @State private var lastHapticStep: Int = 0
+    private let feedbackGenerator = UIImpactFeedbackGenerator(style: .light)
+    @State private var nextAvailableHapticTime: Date = Date()
+    @State private var hapticHappened: Bool = false
+
     var body: some View {
         GeometryReader { geo in
             let size   = min(geo.size.width, geo.size.height)
@@ -44,18 +48,33 @@ struct ThreeQuarterVolumeKnob: View {
                         Color.gray,
                         style: StrokeStyle(lineWidth: size * 0.06, lineCap: .round)
                     )
-                    .blur(radius: 1)
-                ArcShape(startAngle: 225, endAngle: knobAngle)
-                    .stroke(
-                        Color.orange,
-                        style: StrokeStyle(lineWidth: size * 0.06, lineCap: .round, dash: [size * 0.001, size * 0.08])
-                    )
-                    .blur(radius: size * 0.01)
-
+                    .blur(radius:  1)
+                ZStack{
+                    ArcShape(startAngle: 225, endAngle: knobAngle)
+                        .stroke(
+                            Color.red.opacity(1),
+                            style: StrokeStyle(lineWidth: size * 0.06, lineCap: .round, dash: [size * 0.001, size * 0.08])
+                        )
+                        .blur(radius: hapticHappened ? size * 0.1 : size * 0.02)
+                     
+                    
+                    ArcShape(startAngle: 225, endAngle: knobAngle)
+                        .stroke(
+                            Color.orange,
+                            style: StrokeStyle(lineWidth: size * 0.06, lineCap: .round, dash: [size * 0.001, size * 0.08])
+                        )
+                        .blur(radius: size * 0.01)
 
                     
-//                    // Move pivot to circle center.
-//                    .position(x: center.x, y: center.y)
+                }
+                .mask(
+                    ArcShape(startAngle: 225, endAngle: -45)
+                        .stroke(
+                            .ultraThinMaterial.opacity(1),
+                            style: StrokeStyle(lineWidth: size * 0.07, lineCap: .round)
+                        )
+                )
+               
                 ArcShape(startAngle: 225, endAngle: -45)
                     .stroke(
                         .ultraThinMaterial.opacity(1),
@@ -74,13 +93,9 @@ struct ThreeQuarterVolumeKnob: View {
                     .blur(radius: size * 0.01)
 
             }
-            .sensoryFeedback(.alignment, trigger: isAligned) { oldValue, newValue in
-                        print("haptic feedback")
-                       // Plays feedback only when the square aligns with a gridline, but didn't previously.
-                    return !oldValue && newValue
-                   }
             // Make the entire circle draggable.
             .contentShape(Circle())
+            .clipShape(Circle())
             // Drag gesture to update the angle and volume.
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -89,12 +104,11 @@ struct ThreeQuarterVolumeKnob: View {
                         withAnimation(.bouncy(duration: 0.3)) {
                             knobAngle = newAngle
                         }
-                        isAligned = aligned(at: newAngle)
                         
                         // Map the candidate angle [225..(–45)] to volume [0..1].
                         let newVol = (225 - newAngle) / 270
                         volume = max(0, min(1, newVol))
-                        setSystemVolume(volume)
+//                        setSystemVolume(volume)
                     }
             )
             // When volume changes externally, update knobAngle.
@@ -103,12 +117,47 @@ struct ThreeQuarterVolumeKnob: View {
                 withAnimation(.bouncy(duration: 0.3)) {
                     knobAngle = 225 - (270 * newVal)
                 }
-               
             }
             // Initialize angle on appear
             .onAppear {
+              
+                feedbackGenerator.prepare()
                 withAnimation(.bouncy(duration: 0.3)) {
                     knobAngle = 225 - (270 * volume)
+                }
+            }
+            .onChange(of: knobAngle) { newKnobAngle, oldKnobAngle in
+                // Calculate the total sweep of the arc (from 225° down to knobAngle)
+                let sweepAngle = 225 - newKnobAngle
+                // Define an approximate dash angle increment based on your dash style
+                let dashAngleIncrement: Double = 10.3
+                // Compute how many dashes have been rendered so far
+                let newDashCount = Int(sweepAngle / dashAngleIncrement)
+                
+                let currentTime = Date()
+                // Only trigger a haptic if the dash count has changed and if the minimum delay has passed
+                if newDashCount != lastHapticStep && currentTime >= nextAvailableHapticTime {
+                    let stepCount = abs(newDashCount - lastHapticStep)
+                    let delayBetweenHaptics = 0.032  // seconds between each haptic event
+                    
+                    for i in 1...stepCount {
+                        let scheduledTime = nextAvailableHapticTime.addingTimeInterval(delayBetweenHaptics * Double(i))
+                        let dispatchDelay = scheduledTime.timeIntervalSince(currentTime)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + dispatchDelay) {
+                            triggerHaptic()
+                            withAnimation(.bouncy(duration: 0.01)) {
+                                hapticHappened = true
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                                withAnimation(.bouncy(duration: 0.5)) {
+                                    hapticHappened = false
+                                }
+                            }
+                        }
+                    }
+                    // Update the next available haptic time to throttle further events
+                    nextAvailableHapticTime = nextAvailableHapticTime.addingTimeInterval(delayBetweenHaptics * Double(stepCount))
+                    lastHapticStep = newDashCount
                 }
             }
         }
@@ -135,13 +184,16 @@ struct ThreeQuarterVolumeKnob: View {
         return clampedAngle
     }
     
-    private func aligned(at: Double) -> Bool {
-        //write a functin that returns true when the angle is divisible by 10 and between 225 and -45
-        if at <= 225 && at >= -45 && at.truncatingRemainder(dividingBy: 10) == 0 {
-            return true
-        } else {
-            return false
+    private func triggerHaptic() {
+        feedbackGenerator.impactOccurred()
+        withAnimation(.bouncy(duration: 0.01)) {
+            hapticHappened = true
         }
-        
+        feedbackGenerator.prepare()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+            withAnimation(.bouncy(duration: 0.5)) {
+                hapticHappened = false
+            }
+        }
     }
 }
